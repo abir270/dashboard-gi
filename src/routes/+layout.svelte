@@ -17,6 +17,7 @@
   <a href="/encadrement" class="hover:underline">Encadrement</a>
   <a href="/satisfaction" class="hover:underline">Satisfaction</a>
   <a href="/rayonnement" class="hover:underline">Rayonnement</a>
+  <a href="/enseignant" class="hover:underline">Mon espace</a>
   
   <button
     on:click={logout}
