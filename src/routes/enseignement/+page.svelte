@@ -4,215 +4,173 @@
   import { Chart, registerables } from 'chart.js'
   Chart.register(...registerables)
 
-  let taux_principale = $state(0)
-  let taux_rattrapage = $state(0)
-  let taux_controle = $state(0)
-  let taux_assiduite = $state(0)
-  let taux_couverture = $state(0)
-  let taux_tp = $state(0)
-  let taux_validation = $state(0)
-  let taux_double_diplome = $state(0)
-  let etudiants_alerte = $state(0)
+  let enseignant = $state(null)
+  let charge = $state(null)
+  let matieres = $state([])
+  let projets_pfe = $state([])
+  let projets_pjm = $state([])
+  let projets_amp = $state([])
+  let chargement = $state(true)
 
-  let canvasReussite
-  let canvasAssiduite
-  let canvasDoubleDiplome
+  let canvasCharge
 
   onMount(async () => {
-    const { data: res } = await supabase
-      .from('resultats_examens')
-      .select('admis, session_admission, note_rattrapage')
-    if (res && res.length > 0) {
-      const principale = res.filter(r => r.session_admission === 'principale').length
-      const rattrapage = res.filter(r => r.session_admission === 'rattrapage').length
-      const passeRattrapage = res.filter(r => r.note_rattrapage !== null).length
-      taux_principale = Math.round((principale / res.length) * 100)
-      taux_controle = Math.round((passeRattrapage / res.length) * 100)
-      taux_rattrapage = passeRattrapage > 0 ? Math.round((rattrapage / passeRattrapage) * 100) : 0
-      taux_validation = Math.round(((principale + rattrapage) / res.length) * 100)
+    // Récupérer l'utilisateur connecté
+    const { data: { user } } = await supabase.auth.getUser()
 
-      // BarChart réussite principale vs rattrapage
-      new Chart(canvasReussite, {
-        type: 'bar',
-        data: {
-          labels: ['Session principale', 'Rattrapage'],
-          datasets: [{
-            label: 'Taux de réussite (%)',
-            data: [taux_principale, taux_rattrapage],
-            backgroundColor: ['#3b82f6', '#f59e0b'],
-            borderRadius: 8
-          }]
-        },
-        options: {
-          scales: { y: { min: 0, max: 100 } },
-          plugins: { legend: { display: false } }
-        }
-      })
+    if (!user) {
+      window.location.href = '/login'
+      return
     }
 
-    const { data: abs } = await supabase
-      .from('absences_etudiants')
-      .select('nb_justifiees, nb_injustifiees, mois')
-    if (abs && abs.length > 0) {
-      const total = abs.reduce((s, a) => s + a.nb_justifiees + a.nb_injustifiees, 0)
-      const injust = abs.reduce((s, a) => s + a.nb_injustifiees, 0)
-      taux_assiduite = Math.round(100 - (injust / total) * 100)
+    // Trouver l'enseignant par email
+    const { data: perm } = await supabase
+      .from('permanents')
+      .select('*')
+      .limit(1)
+      .single()
 
-      // LineChart assiduité par mois
-      const mois = [...new Set(abs.map(a => a.mois))].sort()
-      const tauxParMois = mois.map(m => {
-        const absM = abs.filter(a => a.mois === m)
-        const tot = absM.reduce((s, a) => s + a.nb_justifiees + a.nb_injustifiees, 0)
-        const inj = absM.reduce((s, a) => s + a.nb_injustifiees, 0)
-        return tot > 0 ? Math.round(100 - (inj / tot) * 100) : 100
-      })
+    if (perm) {
+      enseignant = perm
 
-      new Chart(canvasAssiduite, {
-        type: 'line',
-        data: {
-          labels: mois,
-          datasets: [{
-            label: "Taux d'assiduité (%)",
-            data: tauxParMois,
-            borderColor: '#10b981',
-            backgroundColor: 'rgba(16, 185, 129, 0.1)',
-            tension: 0.4,
-            fill: true
-          }]
-        },
-        options: {
-          scales: { y: { min: 0, max: 100 } }
-        }
-      })
+      // Charge horaire
+      const { data: ch } = await supabase
+        .from('charge_permanents')
+        .select('*')
+        .eq('id_enseignant', perm.id_enseignant)
+
+      if (ch && ch.length > 0) {
+        charge = ch[0]
+
+        // Graphique charge
+        new Chart(canvasCharge, {
+          type: 'bar',
+          data: {
+            labels: ['Heures statutaires', 'Heures réalisées', 'CM', 'TD', 'TP'],
+            datasets: [{
+              label: 'Heures',
+              data: [
+                charge.heures_statutaires,
+                charge.heures_realisees,
+                charge.heures_cm,
+                charge.heures_td,
+                charge.heures_tp
+              ],
+              backgroundColor: ['#e5e7eb', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'],
+              borderRadius: 8
+            }]
+          },
+          options: {
+            plugins: { legend: { display: false } }
+          }
+        })
+      }
+
+      // Matières enseignées
+      const { data: mat } = await supabase
+        .from('matieres_permanents')
+        .select('id_matiere, role')
+        .eq('id_enseignant', perm.id_enseignant)
+
+      if (mat) matieres = mat
+
+      // Projets PFE encadrés
+      const { data: pfe } = await supabase
+        .from('pfe_encadrement')
+        .select('id_pfe, tuteur_entreprise')
+        .eq('id_enseignant', perm.id_enseignant)
+
+      if (pfe) projets_pfe = pfe
+
+      // Projets PJM
+      const { data: pjm } = await supabase
+        .from('pjm_evaluation')
+        .select('id_pjm, note_rapport, note_presentation')
+        .eq('id_enseignant', perm.id_enseignant)
+
+      if (pjm) projets_pjm = pjm
+
+      // Projets AMP
+      const { data: amp } = await supabase
+        .from('amp_evaluation')
+        .select('id_amp, note_memoire')
+        .eq('id_enseignant', perm.id_enseignant)
+
+      if (amp) projets_amp = amp
     }
 
-    const { data: cov } = await supabase
-      .from('couverture_cours')
-      .select('seances_planifiees, seances_realisees')
-    if (cov && cov.length > 0) {
-      const planif = cov.reduce((s, c) => s + c.seances_planifiees, 0)
-      const real = cov.reduce((s, c) => s + c.seances_realisees, 0)
-      taux_couverture = Math.round((real / planif) * 100)
-    }
-
-    const { data: tp } = await supabase
-      .from('travaux_pratiques')
-      .select('statut')
-    if (tp && tp.length > 0) {
-      const dispo = tp.filter(t => t.statut === 'disponible').length
-      taux_tp = Math.round((dispo / tp.length) * 100)
-    }
-
-    const { data: etu } = await supabase
-      .from('etudiants')
-      .select('niveau, double_diplome')
-    if (etu) {
-      const m2 = etu.filter(e => e.niveau === 'M2')
-      const dd = m2.filter(e => e.double_diplome)
-      taux_double_diplome = m2.length > 0 ? Math.round((dd.length / m2.length) * 100) : 0
-
-      // PieChart double diplôme
-      new Chart(canvasDoubleDiplome, {
-        type: 'doughnut',
-        data: {
-          labels: ['Double diplôme', 'Normal'],
-          datasets: [{
-            data: [dd.length, m2.length - dd.length],
-            backgroundColor: ['#3b82f6', '#e5e7eb']
-          }]
-        },
-        options: {
-          plugins: { legend: { position: 'bottom' } }
-        }
-      })
-    }
-
-    const { data: alerte } = await supabase
-      .from('absences_etudiants')
-      .select('id_etudiant, nb_injustifiees')
-    if (alerte) {
-      etudiants_alerte = alerte.filter(a => a.nb_injustifiees > 3).length
-    }
+    chargement = false
   })
 
-  function couleur(valeur, seuil_rouge, seuil_orange) {
-    if (valeur < seuil_rouge) return 'text-red-600'
-    if (valeur < seuil_orange) return 'text-orange-500'
-    return 'text-green-600'
+  function taux_occupation() {
+    if (!charge) return 0
+    return Math.round((charge.heures_realisees / charge.heures_statutaires) * 100)
   }
 </script>
 
-<h1 class="text-2xl font-bold mb-6">Module Enseignement — 11 KPIs</h1>
-
-<div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8">
-
-  <div class="bg-white border rounded-xl p-4 shadow-sm">
-    <p class="text-sm text-gray-500">Taux réussite session principale</p>
-    <p class="text-3xl font-bold {couleur(taux_principale, 60, 75)}">{taux_principale}%</p>
-    <p class="text-xs text-gray-400">Seuil : 60% minimum</p>
+{#if chargement}
+  <div class="flex items-center justify-center h-64">
+    <p class="text-gray-500">Chargement...</p>
+  </div>
+{:else if enseignant}
+  <div class="mb-6">
+    <h1 class="text-2xl font-bold text-blue-900">
+      Bienvenue, {enseignant.prenom} {enseignant.nom}
+    </h1>
+    <p class="text-gray-500">{enseignant.grade} — Département Génie Industriel</p>
   </div>
 
-  <div class="bg-white border rounded-xl p-4 shadow-sm">
-    <p class="text-sm text-gray-500">Taux réussite rattrapage</p>
-    <p class="text-3xl font-bold {couleur(taux_rattrapage, 40, 60)}">{taux_rattrapage}%</p>
-    <p class="text-xs text-gray-400">Seuil : 40% minimum</p>
+  <!-- KPIs personnels -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+
+    <div class="bg-blue-100 p-4 rounded-xl">
+      <p class="text-sm text-gray-500">Taux d'occupation</p>
+      <p class="text-3xl font-bold {taux_occupation() > 100 ? 'text-red-600' : 'text-blue-800'}">{taux_occupation()}%</p>
+    </div>
+
+    <div class="bg-green-100 p-4 rounded-xl">
+      <p class="text-sm text-gray-500">Heures réalisées</p>
+      <p class="text-3xl font-bold text-green-800">{charge?.heures_realisees || 0}h</p>
+    </div>
+
+    <div class="bg-orange-100 p-4 rounded-xl">
+      <p class="text-sm text-gray-500">Matières enseignées</p>
+      <p class="text-3xl font-bold text-orange-800">{matieres.length}</p>
+    </div>
+
+    <div class="bg-purple-100 p-4 rounded-xl">
+      <p class="text-sm text-gray-500">Projets encadrés</p>
+      <p class="text-3xl font-bold text-purple-800">{projets_pfe.length + projets_pjm.length + projets_amp.length}</p>
+    </div>
+
   </div>
 
-  <div class="bg-white border rounded-xl p-4 shadow-sm">
-    <p class="text-sm text-gray-500">Taux de contrôle (rattrapage)</p>
-    <p class="text-3xl font-bold {couleur(100 - taux_controle, 70, 80)}">{taux_controle}%</p>
-    <p class="text-xs text-gray-400">Seuil alerte : &gt; 30%</p>
+  <!-- Graphique charge -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+    <div class="bg-white border rounded-xl p-4 shadow-sm">
+      <h2 class="font-bold mb-4 text-gray-700">Ma charge horaire</h2>
+      <canvas bind:this={canvasCharge}></canvas>
+    </div>
+
+    <div class="bg-white border rounded-xl p-4 shadow-sm">
+      <h2 class="font-bold mb-4 text-gray-700">Mes projets encadrés</h2>
+      <div class="space-y-2">
+        <div class="flex justify-between p-3 bg-blue-50 rounded-lg">
+          <span class="text-sm font-medium">PFE</span>
+          <span class="font-bold text-blue-600">{projets_pfe.length}</span>
+        </div>
+        <div class="flex justify-between p-3 bg-green-50 rounded-lg">
+          <span class="text-sm font-medium">PJM</span>
+          <span class="font-bold text-green-600">{projets_pjm.length}</span>
+        </div>
+        <div class="flex justify-between p-3 bg-orange-50 rounded-lg">
+          <span class="text-sm font-medium">AMP</span>
+          <span class="font-bold text-orange-600">{projets_amp.length}</span>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div class="bg-white border rounded-xl p-4 shadow-sm">
-    <p class="text-sm text-gray-500">Taux d'assiduité</p>
-    <p class="text-3xl font-bold {couleur(taux_assiduite, 70, 85)}">{taux_assiduite}%</p>
-    <p class="text-xs text-gray-400">Seuil : 70% minimum</p>
-  </div>
-
-  <div class="bg-white border rounded-xl p-4 shadow-sm">
-    <p class="text-sm text-gray-500">Couverture des cours</p>
-    <p class="text-3xl font-bold {couleur(taux_couverture, 80, 90)}">{taux_couverture}%</p>
-    <p class="text-xs text-gray-400">Seuil : 80% minimum</p>
-  </div>
-
-  <div class="bg-white border rounded-xl p-4 shadow-sm">
-    <p class="text-sm text-gray-500">TP disponibles</p>
-    <p class="text-3xl font-bold {couleur(taux_tp, 80, 90)}">{taux_tp}%</p>
-    <p class="text-xs text-gray-400">Seuil : 80% minimum</p>
-  </div>
-
-  <div class="bg-white border rounded-xl p-4 shadow-sm">
-    <p class="text-sm text-gray-500">Taux de validation</p>
-    <p class="text-3xl font-bold {couleur(taux_validation, 70, 85)}">{taux_validation}%</p>
-    <p class="text-xs text-gray-400">Seuil : 70% minimum</p>
-  </div>
-
-  <div class="bg-white border rounded-xl p-4 shadow-sm">
-    <p class="text-sm text-gray-500">Double diplôme 4A (M2)</p>
-    <p class="text-3xl font-bold text-blue-600">{taux_double_diplome}%</p>
-    <p class="text-xs text-gray-400">% étudiants M2</p>
-  </div>
-
-  <div class="bg-white border rounded-xl p-4 shadow-sm">
-    <p class="text-sm text-gray-500">Étudiants en alerte</p>
-    <p class="text-3xl font-bold {etudiants_alerte > 0 ? 'text-red-600' : 'text-green-600'}">{etudiants_alerte}</p>
-    <p class="text-xs text-gray-400">Absences injustifiées &gt; 3</p>
-  </div>
-
-</div>
-
-<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-  <div class="bg-white border rounded-xl p-4 shadow-sm md:col-span-1">
-    <h2 class="font-bold mb-4 text-gray-700">Réussite : Principale vs Rattrapage</h2>
-    <canvas bind:this={canvasReussite}></canvas>
-  </div>
-  <div class="bg-white border rounded-xl p-4 shadow-sm md:col-span-1">
-    <h2 class="font-bold mb-4 text-gray-700">Assiduité mensuelle</h2>
-    <canvas bind:this={canvasAssiduite}></canvas>
-  </div>
-  <div class="bg-white border rounded-xl p-4 shadow-sm md:col-span-1">
-    <h2 class="font-bold mb-4 text-gray-700">Double diplôme M2</h2>
-    <canvas bind:this={canvasDoubleDiplome}></canvas>
-  </div>
-</div>
+{:else}
+  <p class="text-red-500">Enseignant non trouvé.</p>
+{/if}
